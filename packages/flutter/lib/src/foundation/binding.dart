@@ -6,7 +6,8 @@ import 'dart:async';
 import 'dart:convert' show json;
 import 'dart:developer' as developer;
 import 'dart:io' show exit;
-import 'dart:ui' show saveCompilationTrace;
+// Before adding any more dart:ui imports, pleaes read the README.
+import 'dart:ui' as ui show saveCompilationTrace, Window, window;
 
 import 'package:meta/meta.dart';
 
@@ -66,6 +67,24 @@ abstract class BindingBase {
   static bool _debugInitialized = false;
   static bool _debugServiceExtensionsRegistered = false;
 
+  /// The window to which this binding is bound.
+  ///
+  /// A number of additional bindings are defined as extensions of [BindingBase],
+  /// e.g., [ServicesBinding], [RendererBinding], and [WidgetsBinding]. Each of
+  /// these bindings define behaviors that interact with a [ui.Window], e.g.,
+  /// [ServicesBinding] registers a [ui.Window.onPlatformMessage] handler, and
+  /// [RendererBinding] registers [ui.Window.onMetricsChanged],
+  /// [ui.Window.onTextScaleFactorChanged], [ui.Window.onSemanticsEnabledChanged],
+  /// and [ui.Window.onSemanticsAction] handlers.
+  ///
+  /// Each of these other bindings could individually access a [Window] statically,
+  /// but that would preclude the ability to test these behaviors with a fake
+  /// window for verification purposes.  Therefore, [BindingBase] exposes this
+  /// [Window] for use by other bindings.  A subclass of [BindingBase], such as
+  /// [TestWidgetsFlutterBinding], can override this accessor to return a
+  /// different [Window] implementation, such as a [TestWindow].
+  ui.Window get window => ui.window;
+
   /// The initialization method. Subclasses override this method to hook into
   /// the platform and otherwise configure their services. Subclasses must call
   /// "super.initInstances()".
@@ -122,15 +141,16 @@ abstract class BindingBase {
         name: 'saveCompilationTrace',
         callback: (Map<String, String> parameters) async {
           return <String, dynamic> {
-            'value': saveCompilationTrace(),
+            'value': ui.saveCompilationTrace(),
           };
         }
       );
     }
 
     assert(() {
+      const String platformOverrideExtensionName = 'platformOverride';
       registerServiceExtension(
-        name: 'platformOverride',
+        name: platformOverrideExtensionName,
         callback: (Map<String, String> parameters) async {
           if (parameters.containsKey('value')) {
             switch (parameters['value']) {
@@ -147,6 +167,10 @@ abstract class BindingBase {
               default:
                 debugDefaultTargetPlatformOverride = null;
             }
+            _postExtensionStateChangedEvent(
+              platformOverrideExtensionName,
+              defaultTargetPlatform.toString().substring('$TargetPlatform.'.length),
+            );
             await reassembleApplication();
           }
           return <String, dynamic>{
@@ -295,8 +319,10 @@ abstract class BindingBase {
     registerServiceExtension(
       name: name,
       callback: (Map<String, String> parameters) async {
-        if (parameters.containsKey('enabled'))
+        if (parameters.containsKey('enabled')) {
           await setter(parameters['enabled'] == 'true');
+          _postExtensionStateChangedEvent(name, await getter() ? 'true' : 'false');
+        }
         return <String, dynamic>{ 'enabled': await getter() ? 'true' : 'false' };
       }
     );
@@ -327,11 +353,42 @@ abstract class BindingBase {
     registerServiceExtension(
       name: name,
       callback: (Map<String, String> parameters) async {
-        if (parameters.containsKey(name))
+        if (parameters.containsKey(name)) {
           await setter(double.parse(parameters[name]));
+          _postExtensionStateChangedEvent(name, (await getter()).toString());
+        }
         return <String, dynamic>{ name: (await getter()).toString() };
       }
     );
+  }
+
+  /// Sends an event when a service extension's state is changed.
+  ///
+  /// Clients should listen for this event to stay aware of the current service
+  /// extension state. Any service extension that manages a state should call
+  /// this method on state change.
+  ///
+  /// `value` reflects the newly updated service extension value.
+  ///
+  /// This will be called automatically for service extensions registered via
+  /// [registerBoolServiceExtension], [registerNumericServiceExtension], or
+  /// [registerStringServiceExtension].
+  void _postExtensionStateChangedEvent(String name, dynamic value) {
+    postEvent(
+      'Flutter.ServiceExtensionStateChanged',
+      <String, dynamic>{
+        'extension': 'ext.flutter.$name',
+        'value': value,
+      },
+    );
+  }
+
+  /// All events dispatched by a [BindingBase] use this method instead of
+  /// calling [developer.postEvent] directly so that tests for [BindingBase]
+  /// can track which events were dispatched by overriding this method.
+  @protected
+  void postEvent(String eventKind, Map<String, dynamic> eventData) {
+    developer.postEvent(eventKind, eventData);
   }
 
   /// Registers a service extension method with the given name (full name
@@ -358,8 +415,10 @@ abstract class BindingBase {
     registerServiceExtension(
       name: name,
       callback: (Map<String, String> parameters) async {
-        if (parameters.containsKey('value'))
+        if (parameters.containsKey('value')) {
           await setter(parameters['value']);
+          _postExtensionStateChangedEvent(name, await getter());
+        }
         return <String, dynamic>{ 'value': await getter() };
       }
     );

@@ -356,7 +356,8 @@ abstract class RenderSliverFloatingPersistentHeader extends RenderSliverPersiste
   RenderSliverFloatingPersistentHeader({
     RenderBox child,
     FloatingHeaderSnapConfiguration snapConfiguration,
-  }) : _snapConfiguration = snapConfiguration, super(child: child);
+  }) : _snapConfiguration = snapConfiguration,
+       super(child: child);
 
   AnimationController _controller;
   Animation<double> _animation;
@@ -393,6 +394,7 @@ abstract class RenderSliverFloatingPersistentHeader extends RenderSliverPersiste
       return;
     if (value == null) {
       _controller?.dispose();
+      _controller = null;
     } else {
       if (_snapConfiguration != null && value.vsync != _snapConfiguration.vsync)
         _controller?.resync(value.vsync);
